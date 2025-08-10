@@ -1,73 +1,82 @@
-import { useState } from 'react';
-import Button from '../components/Button/Button';
-import DatePicker from '../components/DatePicker/DatePicker';
-import TimePicker from '../components/TimePicker/TimePicker';
-import ToastMessage from '../components/ToastMessage/ToastMessage';
-import { TimePeriod } from '../components/TimePicker/TimePickerEnums';
-import { ButtonVariant } from '../components/Button/ButtonEnums';
-import { showToastByKey } from '../utils/showToastByKey';
-import { ReservationToastKey } from '../components/ToastMessage/ToastMessageEnums';
-import PaginationDots from '../components/PaginationDot/PaginationDot';
+import HeroArea from '../components/HeroArea/HeroArea';
+import Card from '../components/Card/Card';
+import img1 from '../assets/images/1.png';
+import img2 from '../assets/images/2.png';
+import img3 from '../assets/images/3.png';
+
 
 const HomePage = () => {
-  const [startHour] = useState<number>(9);
-  const [startPeriod] = useState<TimePeriod>(TimePeriod.AM);
-  const [endHour] = useState<number>(5);
-  const [endPeriod] = useState<TimePeriod>(TimePeriod.PM);
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = String(now.getDate()).padStart(2, '0');
+  const weekdayKorean = ['일', '월', '화', '수', '목', '금', '토'][now.getDay()];
+  const startHour = now.getHours();
+  const rawEndHour = (startHour + 2) % 24;
+  const displayEndHour = rawEndHour === 0 ? 24 : rawEndHour <= startHour ? rawEndHour + 24 : rawEndHour;
+  const defaultDateTime = `${month}월 ${day}일 (${weekdayKorean}) ${startHour}~${displayEndHour}시`;
+  const defaultPeopleCount = 12;
 
   return (
-    <div className="flex flex-col items-center gap-6 p-10 bg-gray-100 min-h-screen">
-      <h1 className="text-xl font-bold">🔥 HomePage 테스트용</h1>
+    <div className="w-full flex flex-col items-center">
+      <div className="flex w-[25.125rem] flex-col justify-center items-center">
+        <HeroArea
+          dateTime={defaultDateTime}
+          peopleCount={defaultPeopleCount}
+          onDateTimeChange={() => {}}
+          onPersonCountChange={() => {}}
+          onSearch={() => {}}
+        />
+        {/* 테스트용 카드 섹션 */}
+        <div className="w-full flex flex-col items-center gap-4 py-4">
+          {/* 디폴트 카드 */}
+          <Card
+            images={[img1, img2, img3]}
+            title="비쥬 합주실 3호점"
+            subtitle="Modern룸"
+            price={55000}
+            locationText="이수역"
+            walkTime="4분"
+            capacity="12인"
+          />
 
-      <div className="flex gap-2">
-        <Button label="검색하기" variant={ButtonVariant.Main} />
-        <Button label="검색하기" variant={ButtonVariant.Sub} />
-        <Button label="검색하기" variant={ButtonVariant.Text} />
+          {/* 일부 시간만 가능 */}
+          <Card
+            images={[img2, img3, img1]}
+            title="그루브 사당점"
+            subtitle="C룸"
+            price={17000}
+            locationText="이수역"
+            walkTime="4분"
+            capacity="8인"
+            partialAvailable
+          />
+
+          {/* 오픈 대기 (기본 90일 후) */}
+          <Card
+            images={[img3, img1, img2]}
+            title="드림합주실 사당점"
+            subtitle="V룸"
+            price={25000}
+            locationText="사당역"
+            walkTime="6분"
+            capacity="17인"
+            booked
+          />
+
+          {/* 오픈 대기 (커스텀 45일 후) */}
+          <Card
+            images={[img1, img3, img2]}
+            title="비쥬 합주실 2호점"
+            subtitle="B룸"
+            price={20000}
+            locationText="이수역"
+            walkTime="7분"
+            capacity="11인"
+            booked
+            reOpenDaysFromNow={45}
+          />
+        </div>
       </div>
-
-      <PaginationDots total={5} current={0} />
-
-      <DatePicker />
-
-      <TimePicker
-        startHour={startHour}
-        startPeriod={startPeriod}
-        endHour={endHour}
-        endPeriod={endPeriod}
-        onConfirm={(sh, sp, eh, ep) => {
-          console.log('확정된 시간:', sp, sh, '~', ep, eh);
-        }}
-        onCancel={() => {
-          console.log('TimePicker 취소');
-        }}
-      />
-
-      {/* ✅ Toast 테스트 버튼 */}
-      <div className="flex gap-3">
-        <Button
-          label="과거 시간"
-          variant={ButtonVariant.Main}
-          onClick={() => showToastByKey(ReservationToastKey.PAST_TIME)}
-        />
-        <Button
-          label="너무 김"
-          variant={ButtonVariant.Main}
-          onClick={() => showToastByKey(ReservationToastKey.TOO_LONG)}
-        />
-        <Button
-          label="너무 짧음"
-          variant={ButtonVariant.Main}
-          onClick={() => showToastByKey(ReservationToastKey.TOO_SHORT)}
-        />
-        <Button
-          label="인원 초과"
-          variant={ButtonVariant.Main}
-          onClick={() => showToastByKey(ReservationToastKey.TOO_MANY_PEOPLE)}
-        />
-      </div>
-
-      {/* ✅ 토스트 메시지 표시용 컴포넌트 (전역 위치에 있어야 함) */}
-      <ToastMessage />
     </div>
   );
 };
