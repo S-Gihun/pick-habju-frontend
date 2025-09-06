@@ -347,6 +347,124 @@ const ROOMS_RAW: RoomMetadata[] = [
     canReserveOneHour: true,
     requiresCallOnSameDay: true
   },
+  {
+    name: "L룸",
+    branch: "스페이스개러지 중앙대점",
+    businessId: "1042278",
+    bizItemId: "5865609",
+    imageUrls: ["/pick-habju/public/images/habjusil/spacegarage/spacegarage-l-1.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-l-2.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-l-3.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-l-4.jpg","/pick-habju/public/images/habjusil/spacegarage/spacegarage-l-5.jpg"],
+    maxCapacity: 15,
+    recommendCapacity: 14,
+    pricePerHour: 20000,
+    subway: {
+      station: "흑석역",
+      timeToWalk: "도보 2분"
+    },
+    canReserveOneHour: true,
+    requiresCallOnSameDay: false
+  },
+  {
+    name: "R룸",
+    branch: "스페이스개러지 중앙대점",
+    businessId: "1042278",
+    bizItemId: "5667365",
+    imageUrls: ["/pick-habju/public/images/habjusil/spacegarage/spacegarage-r-1.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-r-2.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-r-3.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-r-4.jpg"],
+    maxCapacity: 6,
+    recommendCapacity: 4,
+    pricePerHour: 15000,
+    subway: {
+      station: "흑석역",
+      timeToWalk: "도보 2분"
+    },
+    canReserveOneHour: true,
+    requiresCallOnSameDay: false
+  },
+  {
+    name: "X룸",
+    branch: "스페이스개러지 중앙대점",
+    businessId: "1042278",
+    bizItemId: "6925753",
+    imageUrls: ["/pick-habju/public/images/habjusil/spacegarage/spacegarage-x-1.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-x-2.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-x-3.jpg", "/pick-habju/public/images/habjusil/spacegarage/spacegarage-x-4.jpg","/pick-habju/public/images/habjusil/spacegarage/spacegarage-x-5.jpg"],
+    maxCapacity: 5,
+    recommendCapacity: 3,
+    pricePerHour: 13000,
+    subway: {
+      station: "흑석역",
+      timeToWalk: "도보 2분"
+    },
+    canReserveOneHour: true,
+    requiresCallOnSameDay: false
+  },
+  {
+    name: "A룸",
+    branch: "사운딕트합주실",
+    businessId: "1132767",
+    bizItemId: "5836982",
+    imageUrls: ["/pick-habju/public/images/habjusil/sounddict/sounddict-a-1.jpg", "/pick-habju/public/images/habjusil/sounddict/sounddict-a-2.jpg"],
+    maxCapacity: 8,
+    recommendCapacity: 7,
+    pricePerHour: 15000, // 주말에는 20000
+    subway: {
+      station: "이수역",
+      timeToWalk: "도보 4분"
+    },
+    canReserveOneHour: true,
+    requiresCallOnSameDay: false
+  },
+  {
+    name: "B룸",
+    branch: "사운딕트합주실",
+    businessId: "1132767",
+    bizItemId: "5850284",
+    imageUrls: ["/pick-habju/public/images/habjusil/sounddict/sounddict-b-1.jpg", "/pick-habju/public/images/habjusil/sounddict/sounddict-b-2.jpg"],
+    maxCapacity: 8,
+    recommendCapacity: 7,
+    pricePerHour: 15000, // 주말에는 19000
+    subway: {
+      station: "이수역",
+      timeToWalk: "도보 4분"
+    },
+    canReserveOneHour: true,
+    requiresCallOnSameDay: false
+  },
+  {
+    name: "C룸",
+    branch: "사운딕트합주실",
+    businessId: "1132767",
+    bizItemId: "5836988",
+    imageUrls: ["/pick-habju/public/images/habjusil/sounddict/sounddict-c-1.jpg", "/pick-habju/public/images/habjusil/sounddict/sounddict-c-2.jpg"],
+    maxCapacity: 8,
+    recommendCapacity: 7,
+    pricePerHour: 15000, // 주말에는 18000
+    subway: {
+      station: "이수역",
+      timeToWalk: "도보 4분"
+    },
+    canReserveOneHour: true,
+    requiresCallOnSameDay: false
+  },
+  {
+    name: "라운지룸",
+    branch: "에이타입사운드 라운지점",
+    businessId: "984268",
+    bizItemId: "5326848",
+    imageUrls: ["/pick-habju/public/images/habjusil/atype/atype-lounge-1.jpg", "/pick-habju/public/images/habjusil/atype/atype-lounge-2.jpg","/pick-habju/public/images/habjusil/atype/atype-lounge-3.jpg","/pick-habju/public/images/habjusil/atype/atype-lounge-4.jpg","/pick-habju/public/images/habjusil/atype/atype-lounge-5.jpg"],
+    maxCapacity: 12,
+    recommendCapacity: 10,
+    // 4인 초과 1인 1시간
+    baseCapacity: 4,
+    extraCharge: 1000,
+    // 오전 0시~오전 8시: 10000
+    // 오전 8시~오후 2시: 15000
+    // 오후 2시~오전 0시: 18000
+    pricePerHour: 15000,
+    subway: {
+      station: "이수역",
+      timeToWalk: "도보 2분"
+    },
+    canReserveOneHour: false,
+    requiresCallOnSameDay: false
+  },
 ];
 
 // 1시간 예약시 전화 필요한 합주실들
@@ -367,7 +485,13 @@ export const BUSINESS_PHONE_NUMBERS: Record<string, string> = {
   '917236': '070-4237-1004', // 비쥬합주실 3호점
   '1384809': '010-8476-7377', // 준사운드
   'sadang': '010-6235-1423', // 그루브 사당점
-  'dream_sadang': '0507-1423-5054', // 드림합주실 사당점
+  'dream_sadang': '0507-1423-5054',
+  // 스페이스 개러지 중앙대점
+  '1042278': '0507-1423-8962',
+  // 사운딕트합주실
+  '1132767': '0507-1386-7235',
+  // 에이타입사운드 라운지점
+  '984268': '0507-1372-7845',
 };
 
 // 합주실별 대표명 (전화 안내용)
@@ -378,6 +502,9 @@ export const BUSINESS_DISPLAY_NAMES: Record<string, string> = {
   '1384809': '준사운드',
   'sadang': '그루브 사당점',
   'dream_sadang': '드림합주실 사당점',
+  '1042278': '스페이스 개러지 중앙대점',
+  '1132767': '사운딕트합주실',
+  '984268': '에이타입사운드 라운지점',
 };
 
 export const ROOMS: RoomMetadata[] = ROOMS_RAW.map((room) => ({
