@@ -36,8 +36,16 @@ const DefaultView = () => {
       if (a.c.kind === 'default' && b.c.kind === 'default' && lastQuery) {
         const roomA = ROOMS[a.c.roomIndex];
         const roomB = ROOMS[b.c.roomIndex];
-        const priceA = calculateTotalPrice({ room: roomA, hourSlots: lastQuery.hour_slots, peopleCount: lastQuery.peopleCount });
-        const priceB = calculateTotalPrice({ room: roomB, hourSlots: lastQuery.hour_slots, peopleCount: lastQuery.peopleCount });
+        const priceA = calculateTotalPrice({
+          room: roomA,
+          hourSlots: lastQuery.hour_slots,
+          peopleCount: lastQuery.peopleCount,
+        });
+        const priceB = calculateTotalPrice({
+          room: roomB,
+          hourSlots: lastQuery.hour_slots,
+          peopleCount: lastQuery.peopleCount,
+        });
         if (priceA !== priceB) return priceA - priceB;
       }
 
@@ -133,15 +141,15 @@ const DefaultView = () => {
               <ModalOverlay open onClose={() => setOpenIdx(null)}>
                 <div className="w-full max-w-[25.9375rem]" onClick={(e) => e.stopPropagation()}>
                   <BookModalStepper
-                  room={room}
-                  dateIso={lastQuery.date}
-                  hourSlots={lastQuery.hour_slots}
-                  peopleCount={lastQuery.peopleCount}
-                  finalTotalFromCard={price}
-                  onConfirm={() => {
-                    setOpenIdx(null);
-                  }}
-                  onClose={() => setOpenIdx(null)}
+                    room={room}
+                    dateIso={lastQuery.date}
+                    hourSlots={lastQuery.hour_slots}
+                    peopleCount={lastQuery.peopleCount}
+                    finalTotalFromCard={price}
+                    onConfirm={() => {
+                      setOpenIdx(null);
+                    }}
+                    onClose={() => setOpenIdx(null)}
                   />
                 </div>
               </ModalOverlay>
@@ -151,88 +159,85 @@ const DefaultView = () => {
       })}
 
       {/* 모달들 */}
-      {currentModal && lastQuery && (() => {
-        const selectedCard = sorted[currentModal.cardIdx];
-        const selectedRoom = ROOMS[selectedCard.roomIndex];
-        // const selectedPrice = calculateTotalPrice({
-        //   room: selectedRoom,
-        //   hourSlots: lastQuery.hour_slots,
-        //   peopleCount: lastQuery.peopleCount
-        // });
+      {currentModal &&
+        lastQuery &&
+        (() => {
+          const selectedCard = sorted[currentModal.cardIdx];
+          const selectedRoom = ROOMS[selectedCard.roomIndex];
 
-        const closeModal = () => setCurrentModal(null);
+          const closeModal = () => setCurrentModal(null);
 
-        switch (currentModal.type) {
-          case 'partial':
-            return (
-              <PartialReservationConfirmModal
-                open
-                onClose={closeModal}
-                availableTime={currentModal.availableTime || ''}
-                onConfirm={() => {
-                  // 부분 예약 확인 후 다음 모달 결정
-                  if (!selectedCard.availableSlots) {
-                    closeModal();
-                    return;
-                  }
+          switch (currentModal.type) {
+            case 'partial':
+              return (
+                <PartialReservationConfirmModal
+                  open
+                  onClose={closeModal}
+                  availableTime={currentModal.availableTime || ''}
+                  onConfirm={() => {
+                    // 부분 예약 확인 후 다음 모달 결정
+                    if (!selectedCard.availableSlots) {
+                      closeModal();
+                      return;
+                    }
 
-                  // 연속된 true 구간에서 시간 슬롯 추출 (첫 번째 구간만 사용)
-                  const recommendedSlots = extractFirstConsecutiveTrueSlots(selectedCard.availableSlots);
+                    // 연속된 true 구간에서 시간 슬롯 추출 (첫 번째 구간만 사용)
+                    const recommendedSlots = extractFirstConsecutiveTrueSlots(selectedCard.availableSlots);
 
-                  const nextDecision = decidePartialToNextModalFlow({
-                    room: selectedRoom,
-                    dateIso: lastQuery.date,
-                    recommendedHourSlots: recommendedSlots,
-                  });
+                    const nextDecision = decidePartialToNextModalFlow({
+                      room: selectedRoom,
+                      dateIso: lastQuery.date,
+                      recommendedHourSlots: recommendedSlots,
+                    });
 
-                  if (nextDecision.modalType === 'book') {
-                    // 직접 URL로 이동
+                    if (nextDecision.modalType === 'book') {
+                      // 직접 URL로 이동
+                      window.open(getBookingUrl(selectedRoom, lastQuery.date), '_blank');
+                      closeModal();
+                    } else {
+                      setCurrentModal({
+                        type: nextDecision.modalType,
+                        cardIdx: currentModal.cardIdx,
+                        studioName: nextDecision.studioName,
+                        phoneNumber: nextDecision.phoneNumber,
+                      });
+                    }
+                  }}
+                />
+              );
+
+            case 'oneHourCall':
+              return (
+                <OneHourCallReservationNoticeModal
+                  open
+                  onClose={closeModal}
+                  studioName={currentModal.studioName || ''}
+                  phoneNumber={currentModal.phoneNumber || ''}
+                  onConfirm={() => {
                     window.open(getBookingUrl(selectedRoom, lastQuery.date), '_blank');
                     closeModal();
-                  } else {
-                    setCurrentModal({
-                      type: nextDecision.modalType,
-                      cardIdx: currentModal.cardIdx,
-                      studioName: nextDecision.studioName,
-                      phoneNumber: nextDecision.phoneNumber,
-                    });
-                  }
-                }}
-              />
-            );
+                  }}
+                />
+              );
 
-          case 'oneHourCall':
-            return (
-              <OneHourCallReservationNoticeModal
-                open
-                onClose={closeModal}
-                studioName={currentModal.studioName || ''}
-                phoneNumber={currentModal.phoneNumber || ''}
-                onConfirm={() => {
-                  window.open(getBookingUrl(selectedRoom, lastQuery.date), '_blank');
-                  closeModal();
-                }}
-              />
-            );
+            case 'sameDayCall':
+              return (
+                <ModalOverlay open onClose={closeModal}>
+                  <div className="w-full max-w-[25.9375rem]" onClick={(e) => e.stopPropagation()}>
+                    <CallReservationNoticeModal
+                      open
+                      onClose={closeModal}
+                      studioName={currentModal.studioName || ''}
+                      phoneNumber={currentModal.phoneNumber || ''}
+                    />
+                  </div>
+                </ModalOverlay>
+              );
 
-          case 'sameDayCall':
-            return (
-              <ModalOverlay open onClose={closeModal}>
-                <div className="w-full max-w-[25.9375rem]" onClick={(e) => e.stopPropagation()}>
-                  <CallReservationNoticeModal
-                    open
-                    onClose={closeModal}
-                    studioName={currentModal.studioName || ''}
-                    phoneNumber={currentModal.phoneNumber || ''}
-                  />
-                </div>
-              </ModalOverlay>
-            );
-
-          default:
-            return null;
-        }
-      })()}
+            default:
+              return null;
+          }
+        })()}
     </div>
   );
 };
