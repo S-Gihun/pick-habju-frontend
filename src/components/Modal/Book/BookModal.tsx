@@ -7,8 +7,10 @@ import { getBookingUrl } from '../../../utils/bookingUrl';
 import { formatDateKoreanWithWeekday, formatTimeRangeFromSlots } from '../../../utils/dateTimeLabel';
 import { useSessionAnalyticsStore } from '../../../store/analytics/sessionStore';
 import { pushGtmEvent } from '../../../utils/gtm';
+import ModalOverlay from '../ModalOverlay';
 
 export interface BookModalStepperProps {
+  open?: boolean;
   room: RoomMetadata;
   dateIso: string; // YYYY-MM-DD
   hourSlots: string[]; // 예: ["18:00","19:00"]
@@ -18,7 +20,16 @@ export interface BookModalStepperProps {
   onClose?: () => void;
 }
 
-const BookModalStepper = ({ room, dateIso, hourSlots, peopleCount, finalTotalFromCard, onConfirm, onClose }: BookModalStepperProps) => {
+const BookModalStepper = ({
+  open = true,
+  room,
+  dateIso,
+  hourSlots,
+  peopleCount,
+  finalTotalFromCard,
+  onConfirm,
+  onClose,
+}: BookModalStepperProps) => {
   const [step, setStep] = useState<1 | 2>(1);
   const incrementBookModalOpen = useSessionAnalyticsStore((s) => s.incrementBookModalOpen);
   const markEnterStep1 = useSessionAnalyticsStore((s) => s.markEnterStep1);
@@ -42,20 +53,14 @@ const BookModalStepper = ({ room, dateIso, hourSlots, peopleCount, finalTotalFro
     pushGtmEvent('book_modal_open');
   }, [incrementBookModalOpen, markEnterStep1]);
 
-
-  // ESC 닫기
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [close]);
-
-  // 바깥 클릭 닫기는 ModalOverlay에서 처리
-
   return (
-      <div className="w-full max-w-[25.9375rem]" onClick={(e) => e.stopPropagation()}>
+    <ModalOverlay
+      open={open}
+      onClose={close}
+      // dimmedClassName="bg-black/60" // 기본값이므로 생략 가능
+    >
+      {/* ModalOverlay 내부에서 stopPropagation을 처리해주므로 단순히 컨텐츠의 크기와 레이아웃만 정의하면 됨 */}
+      <div className="w-full max-w-[25.9375rem]">
         {step === 1 && (
           <BookStepCalculationModal
             basicAmount={breakdown.basicAmount}
@@ -94,6 +99,7 @@ const BookModalStepper = ({ room, dateIso, hourSlots, peopleCount, finalTotalFro
           />
         )}
       </div>
+    </ModalOverlay>
   );
 };
 
