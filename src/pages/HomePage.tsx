@@ -36,7 +36,7 @@ const HomePage = () => {
   const { defaultDateIso, defaultSlots, defaultDateTimeLabel, defaultPeopleCount } = useDefaultDateTime();
 
   // 4. Custom Hooks: 필터 로직 (검색어, 정렬, 필터링 결과 처리)
-  const { searchText, setSearchText, sortType, setSortType, resetFilters } = useHomePageFilter();
+  const { searchText, setSearchText, resetFilters } = useHomePageFilter();
 
   // 5. Custom Hooks: 검색 비즈니스 로직 (API 호출, 에러 핸들링)
   const { handleSearch: executeSearch } = useHomePageSearch({
@@ -87,10 +87,29 @@ const HomePage = () => {
         {phase === SearchPhase.Default && (
           <>
             <div className="mt-3 mb-2">
-              <SearchBar value={searchText} onSearchChange={setSearchText} />
+              {/* TODO: 지도 페이지 전환 시 아래 값들을 실제 검색에 사용된 값으로 교체 필요
+                - location: 사용자가 선택한 지역명 (현재 임시값 '장소')
+                - peopleCount: 사용자가 선택한 인원수 (현재 초기 기본값 defaultPeopleCount)
+                - dateTime: 사용자가 선택한 날짜/시간 라벨 (현재 초기 기본값 defaultDateTimeLabel)
+                - onConditionClick: 지도 페이지에서 첫 화면(검색 조건 선택)으로 복귀하는 로직 확인 필요
+              */}
+              <SearchBar 
+                value={searchText} 
+                onSearchChange={setSearchText}
+                searchCondition={{
+                  location: '장소',
+                  peopleCount: defaultPeopleCount,
+                  dateTime: defaultDateTimeLabel,
+                }}
+                onConditionClick={() => {
+                  setPhase(SearchPhase.BeforeSearch);
+                  resetFilters();
+                  setHeroResetCounter((c) => c + 1);
+                }}
+              />
             </div>
             <div className="mx-auto">
-              <FilterSection sortValue={sortType} onSortChange={setSortType} />
+              <FilterSection isFavoriteFilterActive={false} onFavoriteFilterToggle={() => {}} />
             </div>
           </>
         )}
