@@ -40,7 +40,6 @@ const MapPage = () => {
   const reservationActions = useReservationStore((s) => s.actions);
   const navigate = useNavigate();
   const mapRef = useRef<NaverMapHandle | null>(null);
-
   // ── 선택·팝오버 상태 ──
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [isCarouselOpen, setIsCarouselOpen] = useState(false);
@@ -521,9 +520,12 @@ const MapPage = () => {
 
       {showSearchHereButton && (
         <div
-          className={`absolute left-1/2 z-40 -translate-x-1/2 transition-all duration-300 ease-out ${
-            isCarouselOpen ? 'bottom-74' : 'bottom-6'
-          }`}
+          className="absolute left-1/2 z-40 -translate-x-1/2 transition-all duration-300 ease-out"
+          style={{
+            bottom: isCarouselOpen
+              ? 'calc(18.5rem + env(safe-area-inset-bottom, 0px))'
+              : 'calc(1.5rem + env(safe-area-inset-bottom, 0px))',
+          }}
         >
           <SearchHereButton onClick={handleSearchHereClick} />
         </div>
