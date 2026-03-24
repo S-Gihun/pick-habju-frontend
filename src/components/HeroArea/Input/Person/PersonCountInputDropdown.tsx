@@ -30,13 +30,6 @@ const PersonCountInputDropdown = ({
   const [guestCount, setGuestCount] = useState(count);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleToggle = useCallback(() => {
-    if (!isOpen) {
-      setGuestCount(count);
-    }
-    onOpenChange(!isOpen);
-  }, [isOpen, onOpenChange, count]);
-
   const handleConfirm = useCallback(() => {
     const shouldClose = onConfirm(guestCount);
     if (shouldClose !== false) {
@@ -44,9 +37,26 @@ const PersonCountInputDropdown = ({
     }
   }, [guestCount, onConfirm, onOpenChange]);
 
+  const handleToggle = useCallback(() => {
+    if (isOpen) {
+      // 드롭다운을 닫으려는 액션은 커밋(확정)을 시도한다.
+      handleConfirm();
+      return;
+    }
+    setGuestCount(count);
+    onOpenChange(true);
+  }, [count, handleConfirm, isOpen, onOpenChange]);
+
   const handleCancel = useCallback(() => {
-    onOpenChange(false);
-  }, [onOpenChange]);
+    handleConfirm();
+  }, [handleConfirm]);
+
+  const handleGuestCountChange = useCallback(
+    (nextCount: number) => {
+      setGuestCount(nextCount);
+    },
+    []
+  );
 
   useEffect(() => {
     if (isOpen) setGuestCount(count);
@@ -91,7 +101,7 @@ const PersonCountInputDropdown = ({
             className="origin-top"
           >
             <div className="flex flex-col bg-primary-white gap-4 py-4 px-3.5 items-center">
-              <GuestCounter value={guestCount} onChange={setGuestCount} min={min} max={max} />
+              <GuestCounter value={guestCount} onChange={handleGuestCountChange} min={min} max={max} />
               <Button
                 label="확인"
                 variant={ButtonVariant.Main}

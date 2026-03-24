@@ -22,6 +22,7 @@ import { trackSearchButtonClick } from '../../utils/analytics';
 import { useGoogleFormToastStore } from '../../store/googleFormToast/googleFormToastStore';
 import { useAnalyticsCycleStore } from '../../store/analytics/analyticsStore';
 import { getServiceableStations, DEFAULT_SERVICEABLE_STATION_ID } from '../../constants/serviceable_stations';
+import useReservationStore from '../../store/dateTime/reservationStore';
 
 const STATIONS = getServiceableStations();
 
@@ -51,6 +52,9 @@ const HeroArea = ({
   );
   const [isSearchClickLocked, setIsSearchClickLocked] = useState<boolean>(false);
   const [activeDropdown, setActiveDropdown] = useState<ActiveDropdown>(null);
+  const [isDateTimeCloseBlocked, setIsDateTimeCloseBlocked] = useState<boolean>(false);
+  const [dateTimeCommitRequestId, setDateTimeCommitRequestId] = useState<number>(0);
+  const [pendingSearchAfterDateTimeCommit, setPendingSearchAfterDateTimeCommit] = useState<boolean>(false);
 
   // GoogleForm Toast Store
   const { incrementSearchCount, showToast } = useGoogleFormToastStore();
@@ -63,15 +67,26 @@ const HeroArea = ({
   // 각 필드의 열기/닫기 요청 핸들러
   const handleDateTimeOpenChange = useCallback((open: boolean) => {
     setActiveDropdown(open ? 'dateTime' : null);
+    // 열림/닫힘과 무관하게 차단 상태를 초기화한다.
+    // (취소 등 커밋 없이 닫힘 포함) 검색/다른 드롭다운이 영구적으로 막히는 상태를 방지.
+    setIsDateTimeCloseBlocked(false);
   }, []);
 
-  const handleLocationOpenChange = useCallback((open: boolean) => {
-    setActiveDropdown(open ? 'location' : null);
-  }, []);
+  const handleLocationOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && activeDropdown === 'dateTime' && isDateTimeCloseBlocked) return;
+      setActiveDropdown(open ? 'location' : null);
+    },
+    [activeDropdown, isDateTimeCloseBlocked]
+  );
 
-  const handlePersonOpenChange = useCallback((open: boolean) => {
-    setActiveDropdown(open ? 'person' : null);
-  }, []);
+  const handlePersonOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && activeDropdown === 'dateTime' && isDateTimeCloseBlocked) return;
+      setActiveDropdown(open ? 'person' : null);
+    },
+    [activeDropdown, isDateTimeCloseBlocked]
+  );
 
   const handlePersonCountConfirm = useCallback(
     (val: number) => {
@@ -100,19 +115,24 @@ const HeroArea = ({
       if (key) {
         const severity = ReservationToastSeverity[key as ReservationToastKey];
         showToastByKey(key);
-        if (severity === 'error') return false;
+        if (severity === 'error') {
+          setIsDateTimeCloseBlocked(true);
+          return false;
+        }
         const dateKey = date.toDateString();
         const start24 = convertTo24Hour(sh, sp);
         const end24 = convertTo24Hour(eh, ep);
         const selectionKey = `${dateKey}|${start24}-${end24}`;
         if (lastWarningKey !== selectionKey) {
           setLastWarningKey(selectionKey);
+          setIsDateTimeCloseBlocked(true);
           return false;
         }
       }
       actions.setDate([date]);
       actions.setHourSlots(sh, sp, eh, ep);
       setLastWarningKey(null);
+      setIsDateTimeCloseBlocked(false);
 
       const dateIso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
       const start24 = convertTo24Hour(sh, sp);
@@ -173,6 +193,78 @@ const HeroArea = ({
 
   const anyDropdownOpen = activeDropdown !== null;
 
+  const runSearch = useCallback(() => {
+    if (isSearchClickLocked) return;
+    setIsSearchClickLocked(true);
+    setTimeout(() => setIsSearchClickLocked(false), 600);
+
+    // 커밋 직후에도 최신 값을 보장하기 위해 스토어에서 직접 조회
+    const { selectedDate: latestSelectedDate, hourSlots: latestHourSlots } = useReservationStore.getState();
+
+    // 스토어에 값이 없으면 props의 기본값 사용
+    let dateIso: string;
+    let slots: string[];
+
+    if (latestSelectedDate) {
+      dateIso = `${latestSelectedDate.getFullYear()}-${String(latestSelectedDate.getMonth() + 1).padStart(2, '0')}-${String(
+        latestSelectedDate.getDate()
+      ).padStart(2, '0')}`;
+    } else {
+      dateIso = dateTime.date;
+    }
+
+    if (latestHourSlots && latestHourSlots.length > 0) {
+      slots = latestHourSlots;
+    } else {
+      slots = dateTime.hour_slots;
+    }
+
+    // 직전 사이클 요약 전송 및 새 사이클 시작
+    try {
+      useAnalyticsCycleStore.getState().endCycleAndFlush({
+        date: dateIso,
+        hour_slots: slots,
+        people_count: peopleCountText,
+      });
+    } catch (e) {
+      console.debug('endCycleAndFlush failed', e);
+    }
+
+    // 검색 횟수 증가 및 토스트 표시 조건 확인
+    incrementSearchCount();
+    showToast();
+
+    // 검색 버튼 클릭 이벤트를 GA에 추적
+    trackSearchButtonClick({
+      date: dateIso,
+      hour_slots: slots,
+      peopleCount: peopleCountText,
+    });
+
+    // UI 라벨 업데이트 보정
+    setDateTimeText(formatReservationLabel(dateIso, slots));
+    const station = STATIONS.find((s) => s.id === selectedLocation.id) ?? STATIONS[0];
+    onSearch({
+      location: station.name,
+      stationId: station.id,
+      center: station.center,
+      bounds: station.bounds,
+      date: dateIso,
+      hour_slots: slots,
+      peopleCount: peopleCountText,
+    });
+  }, [
+    dateTime.date,
+    dateTime.hour_slots,
+    incrementSearchCount,
+    isSearchClickLocked,
+    onSearch,
+    peopleCountText,
+    selectedLocation.id,
+    showToast,
+    setDateTimeText,
+  ]);
+
   return (
     <div
       className="relative w-full h-[625px] flex flex-col items-center overflow-hidden"
@@ -193,7 +285,7 @@ const HeroArea = ({
           animate={{
             y:
               activeDropdown === 'dateTime'
-                ? -180
+                ? -170
                 : activeDropdown === 'location'
                   ? -175
                   : activeDropdown === 'person'
@@ -228,6 +320,13 @@ const HeroArea = ({
                 initialEndPeriod={initialTimeFromSlots.endPeriod}
                 isOpen={activeDropdown === 'dateTime'}
                 onOpenChange={handleDateTimeOpenChange}
+                commitRequestId={dateTimeCommitRequestId}
+                onCommitResult={(didClose) => {
+                  if (!pendingSearchAfterDateTimeCommit) return;
+                  setPendingSearchAfterDateTimeCommit(false);
+                  if (!didClose) return;
+                  runSearch();
+                }}
               />
               <PersonCountInputDropdown
                 count={peopleCountText}
@@ -240,62 +339,13 @@ const HeroArea = ({
               <Button
                 label="검색하기"
                 onClick={() => {
-                  if (isSearchClickLocked) return;
-                  setIsSearchClickLocked(true);
-                  setTimeout(() => setIsSearchClickLocked(false), 600);
-
-                  // 스토어에 값이 없으면 props의 기본값 사용
-                  let dateIso: string;
-                  let slots: string[];
-
-                  if (selectedDate) {
-                    dateIso = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(
-                      selectedDate.getDate()
-                    ).padStart(2, '0')}`;
-                  } else {
-                    dateIso = dateTime.date;
+                  if (activeDropdown === 'dateTime') {
+                    setPendingSearchAfterDateTimeCommit(true);
+                    setDateTimeCommitRequestId((v) => v + 1);
+                    return;
                   }
-
-                  if (hourSlots && hourSlots.length > 0) {
-                    slots = hourSlots;
-                  } else {
-                    slots = dateTime.hour_slots;
-                  }
-
-                  // 직전 사이클 요약 전송 및 새 사이클 시작
-                  try {
-                    useAnalyticsCycleStore.getState().endCycleAndFlush({
-                      date: dateIso,
-                      hour_slots: slots,
-                      people_count: peopleCountText,
-                    });
-                  } catch (e) {
-                    console.debug('endCycleAndFlush failed', e);
-                  }
-
-                  // 검색 횟수 증가 및 토스트 표시 조건 확인
-                  incrementSearchCount();
-                  showToast();
-
-                  // 검색 버튼 클릭 이벤트를 GA에 추적
-                  trackSearchButtonClick({
-                    date: dateIso,
-                    hour_slots: slots,
-                    peopleCount: peopleCountText,
-                  });
-
-                  // UI 라벨 업데이트 보정
-                  setDateTimeText(formatReservationLabel(dateIso, slots));
-                  const station = STATIONS.find((s) => s.id === selectedLocation.id) ?? STATIONS[0];
-                  onSearch({
-                    location: station.name,
-                    stationId: station.id,
-                    center: station.center,
-                    bounds: station.bounds,
-                    date: dateIso,
-                    hour_slots: slots,
-                    peopleCount: peopleCountText,
-                  });
+                  if (isDateTimeCloseBlocked) return;
+                  runSearch();
                 }}
                 variant={ButtonVariant.Main}
                 size={BtnSizeVariant.MD}

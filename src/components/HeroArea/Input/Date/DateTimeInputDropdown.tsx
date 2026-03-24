@@ -30,6 +30,10 @@ export interface DateTimeInputDropdownProps {
   isOpen: boolean;
   /** 드롭다운 열림/닫힘 요청 */
   onOpenChange: (open: boolean) => void;
+  /** 외부(검색 버튼 등)에서 커밋을 요청할 때 증가시키는 값 */
+  commitRequestId?: number;
+  /** 외부 커밋 요청 처리 결과 */
+  onCommitResult?: (didClose: boolean) => void;
 }
 
 const DateTimeInputDropdown = ({
@@ -43,6 +47,8 @@ const DateTimeInputDropdown = ({
   disabled = false,
   isOpen,
   onOpenChange,
+  commitRequestId = 0,
+  onCommitResult,
 }: DateTimeInputDropdownProps) => {
   const [pickerState, setPickerState] = useState<{
     step: 'DATE' | 'TIME';
@@ -65,14 +71,20 @@ const DateTimeInputDropdown = ({
       endPeriod: initialEndPeriod,
     },
   });
+  const resetDraft = useCallback(() => {
+    setPickerState({
+      step: 'DATE',
+      selectedDates: initialSelectedDate ? [initialSelectedDate] : [new Date()],
+      tempDate: null,
+      time: {
+        startHour: initialStartHour,
+        startPeriod: initialStartPeriod,
+        endHour: initialEndHour,
+        endPeriod: initialEndPeriod,
+      },
+    });
+  }, [initialSelectedDate, initialStartHour, initialStartPeriod, initialEndHour, initialEndPeriod]);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const handleToggle = useCallback(() => {
-    if (!isOpen) {
-      setPickerState((s) => ({ ...s, step: 'DATE' }));
-    }
-    onOpenChange(!isOpen);
-  }, [isOpen, onOpenChange]);
 
   const handleDateChange = useCallback((dates: Date[]) => {
     setPickerState((s) => ({ ...s, selectedDates: dates }));
@@ -86,10 +98,6 @@ const DateTimeInputDropdown = ({
     });
   }, []);
 
-  const handleDateStepCancel = useCallback(() => {
-    onOpenChange(false);
-  }, [onOpenChange]);
-
   const handleTimeDraftChange = useCallback((sh: number, sp: TimePeriod, eh: number, ep: TimePeriod) => {
     setPickerState((s) => ({
       ...s,
@@ -97,19 +105,57 @@ const DateTimeInputDropdown = ({
     }));
   }, []);
 
-  const handleTimeConfirm = useCallback(() => {
-    const date = pickerState.tempDate ?? pickerState.selectedDates[0];
-    if (!date) return;
+  const commitCurrentSelection = useCallback(() => {
+    const date = pickerState.step === 'TIME' ? (pickerState.tempDate ?? pickerState.selectedDates[0]) : pickerState.selectedDates[0];
+    if (!date) return false;
     const { startHour, startPeriod, endHour, endPeriod } = pickerState.time;
     const shouldClose = onConfirm(date, startHour, startPeriod, endHour, endPeriod);
-    if (shouldClose !== false) {
-      onOpenChange(false);
-      setPickerState((s) => ({ ...s, step: 'DATE' }));
+    return shouldClose !== false;
+  }, [onConfirm, pickerState.selectedDates, pickerState.step, pickerState.tempDate, pickerState.time]);
+
+  const closeAfterCommit = useCallback(() => {
+    if (!commitCurrentSelection()) return;
+    onOpenChange(false);
+    setPickerState((s) => ({ ...s, step: 'DATE', tempDate: null }));
+  }, [commitCurrentSelection, onOpenChange]);
+
+  const handleToggle = useCallback(() => {
+    if (isOpen) {
+      // 드롭다운을 닫으려는 액션은 바깥 클릭과 동일하게 커밋을 시도한다.
+      closeAfterCommit();
+      return;
     }
-  }, [pickerState, onConfirm, onOpenChange]);
+    setPickerState((s) => ({ ...s, step: 'DATE' }));
+    onOpenChange(true);
+  }, [closeAfterCommit, isOpen, onOpenChange]);
+
+  const lastCommitRequestIdRef = useRef<number>(commitRequestId);
+  useEffect(() => {
+    if (!isOpen) {
+      lastCommitRequestIdRef.current = commitRequestId;
+      return;
+    }
+    if (commitRequestId === lastCommitRequestIdRef.current) return;
+    lastCommitRequestIdRef.current = commitRequestId;
+
+    const didClose = commitCurrentSelection();
+    onCommitResult?.(didClose);
+    if (!didClose) return;
+    onOpenChange(false);
+    setPickerState((s) => ({ ...s, step: 'DATE', tempDate: null }));
+  }, [commitCurrentSelection, commitRequestId, isOpen, onCommitResult, onOpenChange]);
+
+  const handleDateStepCancel = useCallback(() => {
+    onOpenChange(false);
+    resetDraft();
+  }, [onOpenChange, resetDraft]);
+
+  const handleTimeConfirm = useCallback(() => {
+    closeAfterCommit();
+  }, [closeAfterCommit]);
 
   const handleTimeCancel = useCallback(() => {
-    setPickerState((s) => ({ ...s, step: 'DATE' }));
+    setPickerState((s) => ({ ...s, step: 'DATE', tempDate: null }));
   }, []);
 
   const selectedDurationHours = getReservationDurationHours(
@@ -156,7 +202,11 @@ const DateTimeInputDropdown = ({
     if (!isOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        handleDateStepCancel();
+        if (pickerState.step === 'TIME') {
+          handleTimeConfirm();
+        } else {
+          closeAfterCommit();
+        }
       }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -165,7 +215,7 @@ const DateTimeInputDropdown = ({
         if (pickerState.step === 'TIME') {
           setPickerState((s) => ({ ...s, step: 'DATE' }));
         } else {
-          handleDateStepCancel();
+          closeAfterCommit();
         }
       }
     };
@@ -175,7 +225,7 @@ const DateTimeInputDropdown = ({
       document.removeEventListener('mousedown', handleClickOutside);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, pickerState.step, handleDateStepCancel]);
+  }, [isOpen, pickerState.step, closeAfterCommit, handleTimeConfirm]);
 
   return (
     <div
