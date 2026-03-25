@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import BookStepInfoCheck from './StepTwo/BookStepInfoModal';
 import BookStepCalculationModal from './StepOne/BookStepCalculationModal';
 import type { NormalizedRoom } from '../../../hook/useMapPageSearch';
 import { getPriceBreakdown, getRoomLocationLine } from '../../../utils/calcTotalPrice';
 import { getBookingUrl } from '../../../utils/bookingUrl';
-import { formatDateKoreanWithWeekday, formatTimeRangeFromSlots } from '../../../utils/dateTimeLabel';
+import {
+  formatDateKoreanWithWeekday,
+  formatDateMonthDayWithWeekday,
+  formatTimeRangeFromSlots,
+} from '../../../utils/dateTimeLabel';
 import { useSessionAnalyticsStore } from '../../../store/analytics/sessionStore';
+import { useToastStore } from '../../../store/toast/toastStore';
 import { pushGtmEvent } from '../../../utils/gtm';
 import ModalOverlay from '../ModalOverlay';
 import ShareReservationMessageModal from '../Share/ShareReservationMessageModal';
@@ -50,13 +55,56 @@ const BookModalStepper = ({
     pushGtmEvent('book_modal_open');
   }, [incrementBookModalOpen, markEnterStep1]);
 
-  const navigateToBooking = () => {
+  const { showToast } = useToastStore();
+  const isSharingRef = useRef(false);
+
+  const navigateToBooking = useCallback(() => {
     const url = getBookingUrl({ businessId: room.business_id, bizItemId: room.biz_item_id }, dateIso);
     const newWindow = window.open(url, '_blank');
     if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
       window.location.href = url;
     }
-  };
+  }, [room.business_id, room.biz_item_id, dateIso]);
+
+  const handleShare = useCallback(async () => {
+    if (isSharingRef.current) return;
+    isSharingRef.current = true;
+
+    const parseHour = (s: string) => parseInt(s.split(':')[0], 10) || 0;
+    const start = parseHour(hourSlots[0]);
+    const last = parseHour(hourSlots[hourSlots.length - 1]);
+    const end = (last + 1) % 24 || 24;
+
+    const dateLine = formatDateMonthDayWithWeekday(dateIso);
+    const startStr = `${String(start).padStart(2, '0')}:00`;
+    const endStr = `${String(end).padStart(2, '0')}:00`;
+
+    const url = getBookingUrl({ businessId: room.business_id, bizItemId: room.biz_item_id }, dateIso);
+    const perPerson = Math.round(room.estimated_price / peopleCount);
+    const text = [
+      '🎸 [픽합주] 합주실 예약 공지',
+      '',
+      `📍 ${getRoomLocationLine(room)}`,
+      `🗓 ${dateLine}`,
+      `⏰ ${startStr} ~ ${endStr}`,
+      `💰 ${room.estimated_price.toLocaleString('ko-KR')}원 (인당 ${perPerson.toLocaleString('ko-KR')}원)`,
+      '',
+      '📍 위치 보기',
+      url,
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('공지 내용을 복사했습니다!', 'warning');
+      setTimeout(() => {
+        navigateToBooking();
+        onConfirm();
+      }, 1000);
+    } catch {
+      showToast('복사에 실패했습니다.', 'warning');
+      isSharingRef.current = false;
+    }
+  }, [room, dateIso, hourSlots, peopleCount, showToast, navigateToBooking, onConfirm]);
 
   return (
     <ModalOverlay open={open} onClose={close}>
@@ -93,10 +141,7 @@ const BookModalStepper = ({
         )}
         {step === 'share' && (
           <ShareReservationMessageModal
-            onShare={() => {
-              navigateToBooking();
-              onConfirm();
-            }}
+            onShare={handleShare}
             onSkip={() => {
               navigateToBooking();
               onConfirm();
