@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Swiper, SwiperSlide } from 'swiper/react';
 import { Navigation } from 'swiper/modules';
 import type { Swiper as SwiperType } from 'swiper';
@@ -38,21 +38,23 @@ const getSwiperProps = (isDesktop: boolean) =>
         allowTouchMove: true,
       };
 
-/** 슬라이드 한 장: CardCarouselRoom -> Card 렌더, 모바일 활성 슬라이드 시 scale */
-function CarouselSlideContent({
+/**
+ * 슬라이드 한 장: CardCarouselRoom -> Card 렌더, 모바일 활성 슬라이드 시 scale.
+ * memo로 감싸 selectedRoomId 변경·마커 클릭 등으로 CardCarousel이 리렌더될 때
+ * room/isMobile/onBookClick이 바뀌지 않은 슬라이드의 리렌더를 방지.
+ * scale은 .swiper-slide-active CSS 클래스로 처리 — React 리렌더 없이 Swiper가 직접 토글.
+ * delay-300으로 Swiper 애니메이션(300ms) 완료 후 scale이 시작되어 스와이프 중 겹침 방지.
+ */
+const CarouselSlideContent = memo(function CarouselSlideContent({
   room,
-  isActive,
   isMobile,
-  isDesktop,
   onBookClick,
 }: {
   room: CardCarouselRoom;
-  isActive: boolean;
   isMobile: boolean;
-  isDesktop: boolean;
   onBookClick: (bizItemId: string) => void;
 }) {
-  const shouldScale = isMobile && isActive;
+  const isDesktop = !isMobile;
 
   const cardProps: CardProps = {
     images: room.imageUrls,
@@ -69,12 +71,18 @@ function CarouselSlideContent({
 
   return (
     <div className={isDesktop ? 'w-full flex justify-center' : 'flex justify-center'}>
-      <div className={`transform transition-transform duration-300 ${shouldScale ? 'scale-105 z-10' : 'scale-100'}`}>
+      <div
+        className={`transform transition-transform duration-300${
+          isMobile
+            ? ' [.swiper-slide-active_&]:scale-105 [.swiper-slide-active_&]:z-10 [.swiper-slide-active_&]:delay-300'
+            : ''
+        }`}
+      >
         <Card {...cardProps} />
       </div>
     </div>
   );
-}
+});
 
 /**
  * 검색 결과 룸 목록을 하단 슬라이딩 오버레이로 표시하는 캐러셀.
@@ -82,7 +90,15 @@ function CarouselSlideContent({
  * - 사용자 스와이프 시 onCardChange로 선택 룸 ID를 상위에 전달.
  * - isOpen / rooms.length에 따라 AnimatePresence로 슬라이드 인·아웃 처리.
  */
-const CardCarousel = ({ rooms, selectedRoomId, isOpen, onCardChange, onBookClick, forceDevice }: CardCarouselProps) => {
+const CardCarousel = ({
+  rooms,
+  selectedRoomId,
+  isOpen,
+  onCardChange,
+  onSwipeTransitionEnd,
+  onBookClick,
+  forceDevice,
+}: CardCarouselProps) => {
   const detectedMobile = useMobileDetect();
   const isMobile = forceDevice ? forceDevice === 'mobile' : detectedMobile;
   const isDesktop = !isMobile;
@@ -100,15 +116,27 @@ const CardCarousel = ({ rooms, selectedRoomId, isOpen, onCardChange, onBookClick
 
   /** 지도 핀 클릭(selectedRoomId 변경) 시 해당 슬라이드로 동기화. Loop 모드이므로 slideToLoop 사용 */
   useEffect(() => {
-    if (swiperInstance && selectedRoomId && isOpen && rooms.length > 0) {
-      const index = rooms.findIndex((room) => room.bizItemId === selectedRoomId);
-      if (index !== -1) {
-        if (swiperInstance.realIndex !== index) {
-          swiperInstance.slideToLoop(index);
-        }
+    if (!isOpen) {
+      isSwipeReadyRef.current = false;
+      return;
+    }
+    if (!swiperInstance || rooms.length === 0) return;
+
+    if (selectedRoomId === null) {
+      if (swiperInstance.realIndex !== 0) {
+        swiperInstance.slideToLoop(0);
       }
       isSwipeReadyRef.current = true;
+      return;
     }
+
+    const index = rooms.findIndex((room) => room.bizItemId === selectedRoomId);
+    if (index !== -1) {
+      if (swiperInstance.realIndex !== index) {
+        swiperInstance.slideToLoop(index);
+      }
+    }
+    isSwipeReadyRef.current = true;
   }, [selectedRoomId, isOpen, swiperInstance, rooms]);
 
   /** Swiper 마운트 시점의 selectedRoomId 기반 초기 슬라이드 인덱스.
@@ -164,15 +192,19 @@ const CardCarousel = ({ rooms, selectedRoomId, isOpen, onCardChange, onBookClick
                 aria-label="룸 카드 캐러셀"
                 modules={[Navigation]}
                 loop={true}
+                loopAdditionalSlides={2}
                 navigation={false}
                 initialSlide={initialSlide}
                 onSwiper={handleSwiper}
                 {...getSwiperProps(isDesktop)}
-                onSlideChange={(swiper) => {
+                onSlideChangeTransitionEnd={(swiper) => {
                   if (!isSwipeReadyRef.current) return;
                   const currentRoom = rooms[swiper.realIndex];
-                  if (currentRoom && currentRoom.bizItemId !== selectedRoomId) {
-                    onCardChange(currentRoom.bizItemId);
+                  if (currentRoom) {
+                    if (currentRoom.bizItemId !== selectedRoomId) {
+                      onCardChange(currentRoom.bizItemId);
+                    }
+                    onSwipeTransitionEnd?.(currentRoom.bizItemId);
                   }
                 }}
                 className="w-full h-full !py-8"
@@ -180,9 +212,7 @@ const CardCarousel = ({ rooms, selectedRoomId, isOpen, onCardChange, onBookClick
                 {rooms.map((room) => (
                   // [L6] 슬라이드 래퍼: 데스크탑 !w-full(1장 꽉 참), 모바일 !w-auto
                   <SwiperSlide key={room.bizItemId} className={isDesktop ? '!w-full' : '!w-auto'}>
-                    {({ isActive }: { isActive: boolean }) => (
-                      <CarouselSlideContent room={room} isActive={isActive} isMobile={isMobile} isDesktop={isDesktop} onBookClick={onBookClick} />
-                    )}
+                    <CarouselSlideContent room={room} isMobile={isMobile} onBookClick={onBookClick} />
                   </SwiperSlide>
                 ))}
               </Swiper>

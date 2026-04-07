@@ -1,11 +1,21 @@
-﻿import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import PriceLabel from '../Price/PriceLabel/PriceLabel';
-import PriceList from '../Price/PriceList/PriceList';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { renderPriceMarker } from '../../utils/renderPriceMarker';
+import {
+  PRICE_MARKER_ANCHOR_X,
+  PRICE_MARKER_ANCHOR_Y,
+  PRICE_MARKER_DOT_ANCHOR_X,
+  PRICE_MARKER_DOT_ANCHOR_Y,
+  PRICE_MARKER_LABEL_W,
+  PRICE_MARKER_LABEL_H,
+} from '../Price/Marker/PriceMarker';
 import type { MarkerViewModel, MapViewport, NaverMapHandle } from '../../types/map';
 import { getViewportFromMap } from '../../utils/naverMapAdapter';
 import { loadNaverMapScript } from '../../utils/loadNaverMapScript';
 import { getClusterIcons } from '../../hook/getClusterIcons';
+import { buildMarkerBox, computeMarkerLevels, getMarkerPriority } from '../../utils/markerCollisionDetector';
+import type { PriceMarkerLevel } from '../../utils/markerCollisionDetector';
+
+const NAVER_MAP_CUSTOM_STYLE_ID = '1ef1aa21-4f03-4b99-957f-7d08f5f698bb';
 
 /** NaverMap 컴포넌트 Props. */
 type NaverMapProps = {
@@ -15,14 +25,10 @@ type NaverMapProps = {
   initialZoom: number;
   /** 렌더링할 마커 뷰모델 목록. 변경 시 마커 전체 재생성. */
   markerViewModels?: MarkerViewModel[];
-  /** 팝오버(룸 목록)를 열 마커 ID. null이면 팝오버 없음. */
-  openedMarkerPopoverId?: string | null;
   /** 선택된 룸이 속한 마커 ID. 해당 마커 아이콘을 active 상태로 표시. */
   selectedMarkerId?: string | null;
   /** 마커 클릭 시 호출. 마커 ID를 전달. */
   onMarkerClick?: (id: string) => void;
-  /** 팝오버 내 룸 클릭 시 호출. 룸 ID를 전달. */
-  onMarkerRoomClick?: (roomId: string) => void;
   /** 지도 SDK 로드 완료 후 호출. naver.maps.Map 인스턴스를 전달. */
   onLoad?: (map: naver.maps.Map) => void;
   /** idle 이벤트마다 호출. 현재 뷰포트(center + bounds)를 전달. */
@@ -32,22 +38,11 @@ type NaverMapProps = {
   className?: string;
 };
 
-/** 팝오버 오버레이의 위치(px)와 표시할 룸 목록. 마커 클릭 시 생성됨. */
-type ReactMarkerPopover = {
-  left: number;
-  top: number;
-  rooms: Array<{ id: string; name: string; priceText: string }>;
-};
-
-/** PriceLabel 마커 아이콘 너비(px). 팝오버 수평 중앙 정렬 계산에 사용. */
-const MARKER_WIDTH_PX = 129;
-/** PriceLabel 마커 앵커 좌표(px). 아이콘 좌상단 기준 클릭 포인트 위치. */
-const MARKER_ANCHOR_PX = 48;
-
 /**
  * 네이버 지도 SDK 기반 지도 컴포넌트.
- * - markerViewModels로 PriceLabel 마커를 렌더링하고, 클릭·드래그·줌 이벤트를 상위에 전달.
- * - 복수 룸 마커 클릭 시 InfoWindow 대신 React 오버레이(PriceList) 팝오버를 표시.
+ * - markerViewModels로 PriceMarker 마커를 렌더링하고, 클릭·드래그·줌 이벤트를 상위에 전달.
+ * - zoom ≥ 16에서 idle 이벤트마다 AABB 충돌 검사로 마커 레벨(1/2/3)을 자동 조정.
+ * - 마커 클릭 시 onMarkerClick 콜백을 호출해 상위에서 캐러셀을 표시.
  * - ref로 NaverMapHandle(panTo, setCenter, getViewport 등)을 외부에 노출.
  */
 const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
@@ -56,10 +51,8 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
       initialCenter,
       initialZoom,
       markerViewModels,
-      openedMarkerPopoverId,
       selectedMarkerId,
       onMarkerClick,
-      onMarkerRoomClick,
       onLoad,
       onViewportChange,
       onMapEmptyClick,
@@ -70,8 +63,6 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
     // ── DOM 및 Naver Maps 인스턴스 refs ──
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<naver.maps.Map | null>(null);
-    /** 팝오버 div ref. rAF 루프에서 React state 없이 위치를 직접 업데이트하는 데 사용. */
-    const popoverDomRef = useRef<HTMLDivElement>(null);
 
     // ── 지도 이벤트 리스너 refs (cleanup 시 removeListener에 사용) ──
     const idleListenerRef = useRef<naver.maps.MapEventListener | null>(null);
@@ -85,20 +76,36 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
     const onMapEmptyClickRef = useRef(onMapEmptyClick);
     const onMarkerClickRef = useRef(onMarkerClick);
 
-    // ── 마커 인스턴스 및 팝오버 상태 refs ──
+    // ── 마커 인스턴스 refs ──
     const markerInstancesRef = useRef<Map<string, naver.maps.Marker>>(new Map());
     const markerListenersRef = useRef<naver.maps.MapEventListener[]>([]);
     const prevSelectedMarkerIdRef = useRef<string | null>(null);
     /** MarkerClustering 인스턴스. markerViewModels 변경 시 재생성. */
     const clusteringRef = useRef<MarkerClustering | null>(null);
-    // 마커 클릭 핸들러에서 현재 openedMarkerPopoverId를 읽기 위한 ref.
-    // 클로저 생성 시점의 값을 캡처하므로 직접 prop을 참조할 수 없음.
-    const openedMarkerPopoverIdRef = useRef<string | null>(null);
+    /** 마커 ID → 라벨 DOM 실측 크기 캐시. 한 번 측정 후 재사용. */
+    const labelSizeCacheRef = useRef<Map<string, { width: number; height: number }>>(new Map());
+    /** 마커 ID → 현재 표시 레벨. idle마다 비교해 변경된 마커만 setIcon 호출. */
+    const markerLevelsRef = useRef<Map<string, PriceMarkerLevel>>(new Map());
+    /** idle 핸들러에서 최신 markerViewModels를 읽기 위한 ref (클로저 stale 방지). */
+    const markerViewModelsRef = useRef<MarkerViewModel[]>([]);
+    /** idle 핸들러에서 최신 selectedMarkerId를 읽기 위한 ref. */
+    const selectedMarkerIdRef = useRef<string | null>(null);
+    /**
+     * 충돌 감지 + 마커 레벨 업데이트 함수 ref.
+     * 지도 초기화 완료 후 설정되며, markerViewModels 변경 시에도 직접 호출해
+     * idle 이벤트 없이도 레벨을 즉시 반영한다.
+     */
+    const runCollisionDetectionRef = useRef<(() => void) | null>(null);
+    const idleCollisionRafRef = useRef<number | null>(null);
+    /**
+     * panTo 직후 idle 이벤트에서 충돌 감지를 건너뛰기 위한 플래그.
+     * panTo는 줌 레벨을 유지하므로 마커 간 상대 픽셀 거리가 변하지 않아
+     * 충돌 감지 결과가 동일하다. 불필요한 O(n²) 연산을 억제한다.
+     */
+    const suppressCollisionRef = useRef(false);
 
     const [scriptError, setScriptError] = useState<string | null>(null);
     const [isMapReady, setIsMapReady] = useState(false);
-    /** 현재 표시 중인 팝오버 데이터. null이면 팝오버 미표시. */
-    const [reactPopover, setReactPopover] = useState<ReactMarkerPopover | null>(null);
 
     useImperativeHandle(
       ref,
@@ -108,9 +115,29 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
           if (!mapRef.current) return null;
           return getViewportFromMap(mapRef.current);
         },
-        panTo: (lat: number, lng: number) => {
+        panTo: (lat: number, lng: number, offsetY?: number) => {
           if (mapRef.current) {
-            mapRef.current.panTo(new naver.maps.LatLng(lat, lng));
+            for (const marker of markerInstancesRef.current.values()) {
+              if (marker.getMap() === null) {
+                marker.setMap(mapRef.current);
+              }
+            }
+            suppressCollisionRef.current = true;
+
+            const target = new naver.maps.LatLng(lat, lng);
+            if (offsetY && offsetY !== 0) {
+              // projection을 이용해 목표 좌표를 offsetY 픽셀만큼 북쪽(위)으로 이동.
+              // fromCoordToOffset: 현재 줌 기준 월드 픽셀 좌표 반환 (Y 아래 방향 양수).
+              // target.y + offsetY → 지도 중심을 target보다 남쪽으로 이동 → 화면에서 마커가 위로 올라감.
+              const projection = mapRef.current.getProjection();
+              const pt = projection.fromCoordToOffset(target);
+              const adjusted = projection.fromOffsetToCoord(
+                new naver.maps.Point(pt.x, pt.y + offsetY)
+              );
+              mapRef.current.panTo(adjusted);
+            } else {
+              mapRef.current.panTo(target);
+            }
           }
         },
         setCenter: (lat: number, lng: number) => {
@@ -139,6 +166,15 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
       onMarkerClickRef.current = onMarkerClick;
     }, [onMarkerClick]);
 
+    // markerViewModels / selectedMarkerId ref 동기화 — idle 핸들러에서 최신값 참조용
+    useEffect(() => {
+      markerViewModelsRef.current = markerViewModels ?? [];
+    }, [markerViewModels]);
+
+    useEffect(() => {
+      selectedMarkerIdRef.current = selectedMarkerId ?? null;
+    }, [selectedMarkerId]);
+
     // 네이버 지도 SDK 스크립트 로드 → 지도 인스턴스 생성 → 이벤트 리스너 등록.
     // initialCenter·initialZoom은 마운트 시 1회만 사용. props 변경 시 지도를 재생성하지 않는다.
     const initialCenterRef = useRef(initialCenter);
@@ -162,6 +198,8 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
             zoom: initialZoomRef.current,
             zoomControl: false,
             mapDataControl: false,
+            gl: true,
+            customStyleId: NAVER_MAP_CUSTOM_STYLE_ID,
           });
 
           mapRef.current = map;
@@ -170,9 +208,119 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
           const loadCb = onLoadRef.current;
           if (loadCb) loadCb(map);
 
+          // 충돌 감지 + 마커 레벨 업데이트 함수.
+          // idle 핸들러와 markerViewModels 변경 시 모두 호출된다.
+          const runCollisionDetection = () => {
+            const models = markerViewModelsRef.current;
+            const currentSelectedId = selectedMarkerIdRef.current;
+            const projection = map.getProjection();
+            const bounds = map.getBounds() as naver.maps.LatLngBounds | null;
+            if (!bounds) return;
+
+            // 1. 실제로 지도에 표시 중인 마커만 추출.
+            // MarkerClustering이 클러스터로 묶은 마커는 setMap(null) 상태이므로 제외된다.
+            // zoom 숫자가 아닌 실제 가시성을 기준으로 하여, 클러스터링 구간(zoom ≤ 15)에서도
+            // 클러스터에 포함되지 않은 단독 마커에는 충돌 감지가 적용된다.
+            const visibleModels = models.filter((m) => {
+              const marker = markerInstancesRef.current.get(m.id);
+              return marker != null && marker.getMap() !== null && bounds.hasLatLng(new naver.maps.LatLng(m.lat, m.lng));
+            });
+
+            // 2. 라벨 DOM 크기 측정 (캐시 미스만)
+            for (const m of visibleModels) {
+              if (!labelSizeCacheRef.current.has(m.id)) {
+                const markerEl = markerInstancesRef.current.get(m.id)?.getElement();
+                const labelEl = markerEl?.querySelector('[data-marker-label]');
+                if (labelEl) {
+                  const rect = labelEl.getBoundingClientRect();
+                  if (rect.width > 0) {
+                    labelSizeCacheRef.current.set(m.id, {
+                      width: rect.width,
+                      height: rect.height,
+                    });
+                  }
+                }
+              }
+            }
+
+            // 3. MarkerBox 배열 생성
+            // labelSize: DOM 측정값 우선, 없으면 CSS 제약 기반 상수로 폴백.
+            // idle 시점에 마커 DOM이 아직 렌더링되지 않은 경우를 대비한 안전장치.
+            const boxes = visibleModels.map((m) => {
+              const pos = projection.fromCoordToOffset(new naver.maps.LatLng(m.lat, m.lng));
+              const labelSize = labelSizeCacheRef.current.get(m.id) ?? {
+                width: PRICE_MARKER_LABEL_W,
+                height: PRICE_MARKER_LABEL_H,
+              };
+              const priority = getMarkerPriority(m.id === currentSelectedId, m.favorite === 'on');
+              return buildMarkerBox(m.id, { x: pos.x, y: pos.y }, labelSize, priority);
+            });
+
+            // 4. 충돌 검사 → 레벨 결정
+            const newLevels = computeMarkerLevels(boxes);
+
+            // 5. 변경된 마커만 setIcon 업데이트
+            for (const m of visibleModels) {
+              const newLevel = newLevels.get(m.id) ?? 1;
+              const isSelected = m.id === currentSelectedId;
+
+              const prevLevel = markerLevelsRef.current.get(m.id);
+
+              // 충돌 감지 레벨은 항상 캐시에 저장.
+              // effectiveLevel(선택 시 강제 1)이 아닌 newLevel을 저장해야
+              // 선택 해제 시 selectedMarkerId effect가 올바른 레벨로 복원할 수 있다.
+              markerLevelsRef.current.set(m.id, newLevel);
+
+              // 선택된 마커의 아이콘은 selectedMarkerId effect에서 전담 관리.
+              // 여기서 처리하면 effectiveLevel=1이 캐시에 덮어써지는 버그가 발생하므로 건너뜀.
+              if (isSelected) continue;
+
+              if (prevLevel !== newLevel) {
+                const marker = markerInstancesRef.current.get(m.id);
+                if (marker) {
+                  marker.setZIndex(m.favorite === 'on' ? 1 : 0);
+                  const anchorX = newLevel === 3 ? PRICE_MARKER_DOT_ANCHOR_X : PRICE_MARKER_ANCHOR_X;
+                  const anchorY = newLevel === 3 ? PRICE_MARKER_DOT_ANCHOR_Y : PRICE_MARKER_ANCHOR_Y;
+                  marker.setIcon({
+                    content: renderPriceMarker({
+                      level: newLevel,
+                      name: m.name,
+                      price: m.priceText,
+                      isFave: m.favorite === 'on',
+                      isPartial: m.isPartial,
+                      isActive: false,
+                      extraRoomCount: m.extraRoomCount,
+                    }),
+                    anchor: new naver.maps.Point(anchorX, anchorY),
+                  });
+                }
+              }
+            }
+          };
+
+          runCollisionDetectionRef.current = runCollisionDetection;
+
           idleListenerRef.current = naver.maps.Event.addListener(map, 'idle', () => {
+            // 뷰포트 변경 알림
             const viewportCb = onViewportChangeRef.current;
             if (viewportCb) viewportCb(getViewportFromMap(map));
+
+            // panTo 직후 idle은 충돌 감지를 건너뜀.
+            // panTo는 줌 레벨을 유지하므로 마커 간 상대 픽셀 거리가 변하지 않아
+            // 결과가 동일하다. 플래그를 소비한 뒤 즉시 리셋.
+            if (suppressCollisionRef.current) {
+              suppressCollisionRef.current = false;
+              return;
+            }
+
+            // 충돌 감지를 다음 프레임으로 지연.
+            // idle 이벤트는 우리 리스너와 MarkerClustering 내부 리스너가 모두 구독하는데,
+            // 등록 순서상 우리 리스너가 먼저 실행된다.
+            // 클러스터 해제 시(zoom 15→16) MarkerClustering이 개별 마커를 setMap(map)으로
+            // 복원하기 전에 우리 코드가 실행되면 visibleModels가 비어 충돌 감지가 무시된다.
+            // requestAnimationFrame으로 한 프레임 뒤에 실행하면 MarkerClustering 처리가
+            // 완료된 이후에 충돌 감지가 실행된다.
+            idleCollisionRafRef.current = requestAnimationFrame(runCollisionDetection);
           });
 
           mapClickListenerRef.current = naver.maps.Event.addListener(map, 'click', () => {
@@ -212,18 +360,23 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
           mapClickListenerRef.current = null;
         }
 
+        runCollisionDetectionRef.current = null;
+
+        if (idleCollisionRafRef.current !== null) {
+          cancelAnimationFrame(idleCollisionRafRef.current);
+          idleCollisionRafRef.current = null;
+        }
+
         if (mapRef.current) {
           mapRef.current.destroy();
           mapRef.current = null;
           setIsMapReady(false);
         }
-        setReactPopover(null);
       };
     }, []);
 
     // markerViewModels 변경 시 마커 전체 재생성.
-    // 단일 룸 마커: 클릭 시 바로 룸 선택.
-    // 복수 룸 마커: 클릭 시 팝오버 토글.
+    // 마커 클릭 시 onMarkerClick 호출 → 상위에서 캐러셀 표시.
     // MarkerClustering이 로드된 경우 클러스터링 인스턴스도 재생성.
     useEffect(() => {
       if (!isMapReady) return;
@@ -250,23 +403,28 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
       const models = markerViewModels ?? [];
       const markerArray: naver.maps.Marker[] = [];
 
+      // 마커 재생성 시 레벨/라벨 캐시 초기화
+      labelSizeCacheRef.current.clear();
+      markerLevelsRef.current.clear();
+
       for (const model of models) {
         // MarkerClustering이 마커 가시성(setMap)을 관리하므로 map 속성 없이 생성.
         // 클러스터링 미사용 폴백 시에는 아래에서 직접 setMap을 호출한다.
+        // 초기 렌더링은 level 1로 시작. idle 이벤트에서 충돌 검사 후 레벨 조정됨.
         const marker = new naver.maps.Marker({
           position: new naver.maps.LatLng(model.lat, model.lng),
           zIndex: model.favorite === 'on' ? 1 : 0,
           icon: {
-            content: renderToStaticMarkup(
-              <PriceLabel
-                priceText={model.priceText}
-                isPartial={model.isPartial}
-                favorite={model.favorite}
-                isActive={model.isActive}
-                extraRoomCount={model.extraRoomCount}
-              />
-            ),
-            anchor: new naver.maps.Point(MARKER_ANCHOR_PX, MARKER_ANCHOR_PX), // PriceLabel 컴포넌트 기준 앵커 위치 (좌상단으로부터 px)
+            content: renderPriceMarker({
+              level: 1,
+              name: model.name,
+              price: model.priceText,
+              isFave: model.favorite === 'on',
+              isPartial: model.isPartial,
+              isActive: false,
+              extraRoomCount: model.extraRoomCount,
+            }),
+            anchor: new naver.maps.Point(PRICE_MARKER_ANCHOR_X, PRICE_MARKER_ANCHOR_Y),
           },
         });
 
@@ -274,28 +432,6 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
         markerInstancesRef.current.set(model.id, marker);
         markerListenersRef.current.push(
           naver.maps.Event.addListener(marker, 'click', () => {
-            if (model.rooms.length > 1) {
-              if (openedMarkerPopoverIdRef.current === model.id) {
-                // 이미 열린 마커 재클릭 → 팝오버 닫기
-                setReactPopover(null);
-              } else {
-                // SDK의 map.getProjection().fromCoordToOffset()은 패닝 후 내부 캐시를
-                // 즉시 갱신하지 않아 stale한 좌표를 반환한다 (줌은 projection 스케일이
-                // 바뀌어 강제 재계산되므로 정상 동작).
-                // → 마커 DOM 요소의 getBoundingClientRect()로 실제 화면 위치를 직접 읽는다.
-                const markerEl = markerInstancesRef.current.get(model.id)?.getElement();
-                if (markerEl && mapContainerRef.current) {
-                  const markerRect = markerEl.getBoundingClientRect();
-                  const containerRect = mapContainerRef.current.getBoundingClientRect();
-                  setReactPopover({
-                    // 마커 이미지 좌상단 기준 → 시각적 중앙(x), 상단에서 gap(y)으로 보정
-                    left: markerRect.left - containerRect.left + MARKER_WIDTH_PX / 2,
-                    top: markerRect.top - containerRect.top,
-                    rooms: model.rooms.map((r) => ({ id: r.id, name: r.name, priceText: r.priceText })),
-                  });
-                }
-              }
-            }
             onMarkerClickRef.current?.(model.id);
           })
         );
@@ -328,91 +464,114 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
           marker.setMap(map);
         }
       }
+
+      // 마커 재생성 후 idle 이벤트 없이도 충돌 감지를 즉시 실행한다.
+      // idle은 지도가 이동·줌이 완료된 뒤에만 발생하므로,
+      // 같은 위치에서 재검색하면 idle이 발생하지 않아 마커가 level 1로 굳는 문제를 방지.
+      // requestAnimationFrame으로 마커 DOM이 브라우저에 그려진 뒤 실행.
+      const rafId = requestAnimationFrame(() => {
+        runCollisionDetectionRef.current?.();
+      });
+
+      return () => {
+        cancelAnimationFrame(rafId);
+      };
     }, [isMapReady, markerViewModels]);
 
-    // selectedMarkerId 변경 시 이전·현재 마커 아이콘만 교체 (isActive 플래그).
-    // 전체 마커를 재생성하지 않고 두 개만 갱신하여 성능 최적화.
+    // selectedMarkerId 변경 시 이전·현재 마커의 활성 상태를 전환한다.
+    //
+    // [공통 경로 — level 1] setIcon 없이 data-pm-active 속성 토글만 수행.
+    //   DOM 재생성이 없어 캐러셀 슬라이딩 중 "툭" 끊기는 현상을 방지한다.
+    //   이전 마커의 fave 여부는 DOM data-pm-type 속성에서 읽어 models.find를 생략한다.
+    //
+    // [폴백 — level 2/3] 충돌 감지로 축소된 마커를 선택할 때만 setIcon으로 level 1 전환.
+    //   해제 시에도 마커 레벨 캐시 기준 원래 크기로 복원한다.
     useEffect(() => {
       if (!isMapReady) return;
 
-      const models = markerViewModels ?? [];
-      const prev = prevSelectedMarkerIdRef.current;
-      prevSelectedMarkerIdRef.current = selectedMarkerId ?? null;
+      const currId = selectedMarkerId ?? null;
+      const prevId = prevSelectedMarkerIdRef.current;
+      prevSelectedMarkerIdRef.current = currId;
 
-      if (prev) {
-        const prevMarker = markerInstancesRef.current.get(prev);
-        const prevModel = models.find((m) => m.id === prev);
-        if (prevMarker && prevModel) {
-          prevMarker.setZIndex(prevModel.favorite === 'on' ? 1 : 0);
-          prevMarker.setIcon({
-            content: renderToStaticMarkup(
-              <PriceLabel
-                priceText={prevModel.priceText}
-                isPartial={prevModel.isPartial}
-                favorite={prevModel.favorite}
-                isActive={false}
-                extraRoomCount={prevModel.extraRoomCount}
-              />
-            ),
-            anchor: new naver.maps.Point(MARKER_ANCHOR_PX, MARKER_ANCHOR_PX), // PriceLabel 컴포넌트 기준 앵커 위치 (좌상단으로부터 px)
-          });
-        }
-      }
+      const rafId = requestAnimationFrame(() => {
+        // ── 이전 마커 비활성화 ──────────────────────────────────────────────
+        if (prevId) {
+          const prevMarker = markerInstancesRef.current.get(prevId);
+          if (prevMarker) {
+            const prevLevel = markerLevelsRef.current.get(prevId) ?? 1;
+            const prevEl = prevMarker.getElement()?.querySelector<HTMLElement>('[data-pm-active]');
+            // data-pm-type에서 fave 여부 판별 → models.find 불필요
+            const isFave = prevEl?.dataset.pmType?.startsWith('fave') ?? false;
+            prevMarker.setZIndex(isFave ? 1 : 0);
 
-      if (selectedMarkerId) {
-        const marker = markerInstancesRef.current.get(selectedMarkerId);
-        const model = models.find((m) => m.id === selectedMarkerId);
-        if (marker && model) {
-          marker.setZIndex(10);
-          marker.setIcon({
-            content: renderToStaticMarkup(
-              <PriceLabel
-                priceText={model.priceText}
-                isPartial={model.isPartial}
-                favorite={model.favorite}
-                isActive={true}
-                extraRoomCount={model.extraRoomCount}
-              />
-            ),
-            anchor: new naver.maps.Point(MARKER_ANCHOR_PX, MARKER_ANCHOR_PX), // PriceLabel 컴포넌트 기준 앵커 위치 (좌상단으로부터 px)
-          });
+            if (prevLevel === 1) {
+              // [공통] CSS 토글만 — DOM 재생성 없음
+              prevEl?.setAttribute('data-pm-active', 'false');
+            } else {
+              // [폴백] level 2/3 복원 — setIcon 필요
+              const prevModel = (markerViewModels ?? []).find((m) => m.id === prevId);
+              if (prevModel) {
+                const anchorX = prevLevel === 3 ? PRICE_MARKER_DOT_ANCHOR_X : PRICE_MARKER_ANCHOR_X;
+                const anchorY = prevLevel === 3 ? PRICE_MARKER_DOT_ANCHOR_Y : PRICE_MARKER_ANCHOR_Y;
+                prevMarker.setIcon({
+                  content: renderPriceMarker({
+                    level: prevLevel,
+                    name: prevModel.name,
+                    price: prevModel.priceText,
+                    isFave: prevModel.favorite === 'on',
+                    isPartial: prevModel.isPartial,
+                    isActive: false,
+                    extraRoomCount: prevModel.extraRoomCount,
+                  }),
+                  anchor: new naver.maps.Point(anchorX, anchorY),
+                });
+              }
+            }
+          }
         }
-      }
+
+        // ── 현재 마커 활성화 ────────────────────────────────────────────────
+        if (currId) {
+          const currMarker = markerInstancesRef.current.get(currId);
+          if (currMarker) {
+            const currLevel = markerLevelsRef.current.get(currId) ?? 1;
+            currMarker.setZIndex(1000);
+
+            if (currLevel === 1) {
+              // [공통] CSS 토글만 — DOM 재생성 없음
+              currMarker
+                .getElement()
+                ?.querySelector<HTMLElement>('[data-pm-active]')
+                ?.setAttribute('data-pm-active', 'true');
+            } else {
+              // [폴백] level 2/3 → level 1 전환 후 CSS 활성화
+              const currModel = (markerViewModels ?? []).find((m) => m.id === currId);
+              if (currModel) {
+                currMarker.setIcon({
+                  content: renderPriceMarker({
+                    level: 1,
+                    name: currModel.name,
+                    price: currModel.priceText,
+                    isFave: currModel.favorite === 'on',
+                    isPartial: currModel.isPartial,
+                    isActive: false,
+                    extraRoomCount: currModel.extraRoomCount,
+                  }),
+                  anchor: new naver.maps.Point(PRICE_MARKER_ANCHOR_X, PRICE_MARKER_ANCHOR_Y),
+                });
+                // setIcon이 DOM을 교체한 직후 새 요소에 활성 속성 적용
+                currMarker
+                  .getElement()
+                  ?.querySelector<HTMLElement>('[data-pm-active]')
+                  ?.setAttribute('data-pm-active', 'true');
+              }
+            }
+          }
+        }
+      });
+
+      return () => cancelAnimationFrame(rafId);
     }, [isMapReady, selectedMarkerId, markerViewModels]);
-
-    // 팝오버가 열린 동안 rAF 루프로 마커 DOM 위치를 매 프레임 추적해 팝오버 좌표를 갱신.
-    // Naver Maps SDK는 패닝·줌 시 마커 DOM을 직접 이동시키므로
-    // getBoundingClientRect()는 항상 현재 화면 위치를 정확히 반환한다.
-    // → 팝오버가 마커를 따라 움직여 지도 이동 중에도 닫히지 않는다.
-    useEffect(() => {
-      if (!openedMarkerPopoverId) return;
-      let animFrameId: number;
-
-      const track = () => {
-        const markerEl = markerInstancesRef.current.get(openedMarkerPopoverId)?.getElement();
-        if (markerEl && mapContainerRef.current && popoverDomRef.current) {
-          const markerRect = markerEl.getBoundingClientRect();
-          const containerRect = mapContainerRef.current.getBoundingClientRect();
-          // React state/리렌더 없이 DOM에 직접 write → 같은 프레임 안에 반영되어 지연 없음
-          popoverDomRef.current.style.left = `${markerRect.left - containerRect.left + MARKER_WIDTH_PX / 2}px`;
-          popoverDomRef.current.style.top = `${markerRect.top - containerRect.top}px`;
-        }
-        animFrameId = requestAnimationFrame(track);
-      };
-
-      animFrameId = requestAnimationFrame(track);
-      return () => cancelAnimationFrame(animFrameId);
-    }, [openedMarkerPopoverId]);
-
-    // openedMarkerPopoverId 동기화 및 팝오버 닫기.
-    // - ref 동기화: 마커 클릭 핸들러에서 현재값을 읽기 위함 (클로저 stale 방지).
-    // - null로 변경 시 팝오버 닫기: 필터 변경·룸 선택 등 외부에서 팝오버를 닫을 때 호출됨.
-    useEffect(() => {
-      openedMarkerPopoverIdRef.current = openedMarkerPopoverId ?? null;
-      if (!openedMarkerPopoverId) {
-        setReactPopover(null);
-      }
-    }, [openedMarkerPopoverId]);
 
     if (scriptError) {
       return (
@@ -426,33 +585,8 @@ const NaverMap = forwardRef<NaverMapHandle, NaverMapProps>(
     }
 
     return (
-      // position: relative — 팝오버 absolute 기준점
-      <div className={className} style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div className={className} style={{ width: '100%', height: '100%' }}>
         <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
-
-        {/* 룸 목록 팝오버.
-            Naver Maps InfoWindow는 React 트리 밖 DOM이라 클릭 이벤트가 동작하지 않으므로,
-            absolute div + React 컴포넌트로 대체.
-            transform: translate(-50%, -100%) → 수평 중앙 정렬, 마커 상단에 하단 배치.
-            stopPropagation → 팝오버 위 터치·클릭이 지도 이벤트로 전파되지 않도록 차단. */}
-        {reactPopover && (
-          <div
-            ref={popoverDomRef}
-            className="absolute z-30"
-            style={{
-              left: reactPopover.left,
-              top: reactPopover.top,
-              transform: 'translate(-50%, -100%)',
-            }}
-            onMouseDown={(event) => event.stopPropagation()}
-            onMouseUp={(event) => event.stopPropagation()}
-            onTouchStart={(event) => event.stopPropagation()}
-            onTouchEnd={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <PriceList rooms={reactPopover.rooms} isOpen onRoomClick={(room) => onMarkerRoomClick?.(room.id)} />
-          </div>
-        )}
       </div>
     );
   }

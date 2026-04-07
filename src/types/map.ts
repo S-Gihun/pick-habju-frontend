@@ -41,6 +41,7 @@ export type MarkerUiState = {
 /** 지도 마커 하나에 대한 뷰모델. 좌표 + 가격 텍스트 + UI 상태 + 해당 지점의 룸 목록(rooms). */
 export type MarkerViewModel = MapMarker &
   MarkerUiState & {
+    name: string;
     priceText: string;
     extraRoomCount: number;
     rooms: MarkerRoomItem[];
@@ -50,7 +51,12 @@ export type MarkerViewModel = MapMarker &
 export interface NaverMapHandle {
   getMap: () => naver.maps.Map | null;
   getViewport: () => MapViewport | null;
-  panTo: (lat: number, lng: number) => void;
+  /**
+   * 지도를 (lat, lng)으로 이동.
+   * offsetY: 화면 픽셀 기준 수직 오프셋. 양수이면 마커가 화면 중앙보다 위에 위치.
+   * 상단 UI(검색바)와 하단 UI(캐러셀)를 제외한 가시 영역 중앙에 마커를 맞출 때 사용.
+   */
+  panTo: (lat: number, lng: number, offsetY?: number) => void;
   setCenter: (lat: number, lng: number) => void;
 }
 
