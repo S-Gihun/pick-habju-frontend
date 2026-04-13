@@ -373,11 +373,41 @@ naver.maps.Util.ClassExtend(MarkerClustering, naver.maps.OverlayView, {
   },
 
   /**
+   * _redraw 전용: 개별 마커의 setMap 상태를 건드리지 않고 클러스터 데이터만 정리합니다.
+   * _softDestroy로 클러스터 마커(합산 아이콘)만 제거하고, 개별 마커 DOM은 유지합니다.
+   * @private
+   */
+  _softClearClusters: function () {
+    var clusters = this._clusters;
+
+    for (var i = 0, ii = clusters.length; i < ii; i++) {
+      clusters[i]._softDestroy();
+    }
+
+    naver.maps.Event.removeListener(this._markerRelations);
+
+    this._markerRelations = [];
+    this._clusters = [];
+  },
+
+  /**
    * 생성된 클러스터를 모두 제거하고, 다시 생성합니다.
+   * 마커 목록 변경 등 완전한 재구성이 필요한 경우 사용합니다.
    * @private
    */
   _redraw: function () {
     this._clearClusters();
+    this._createClusters();
+    this._updateClusters();
+  },
+
+  /**
+   * idle/zoom 등 마커 목록은 동일한 상태에서의 재클러스터링 전용.
+   * 개별 마커의 DOM 재삽입 없이 클러스터를 재구성합니다.
+   * @private
+   */
+  _softRedraw: function () {
+    this._softClearClusters();
     this._createClusters();
     this._updateClusters();
   },
@@ -419,14 +449,14 @@ naver.maps.Util.ClassExtend(MarkerClustering, naver.maps.OverlayView, {
    * 지도의 Idle 상태 이벤트 핸들러입니다.
    */
   _onIdle: function () {
-    this._redraw();
+    this._softRedraw();
   },
 
   /**
    * 각 마커의 드래그 종료 이벤트 핸들러입니다.
    */
   _onDragEnd: function () {
-    this._redraw();
+    this._softRedraw();
   },
 });
 
@@ -477,7 +507,30 @@ Cluster.prototype = {
       members[i].setMap(null);
     }
 
-    this._clusterMarker.setMap(null);
+    if (this._clusterMarker) {
+      this._clusterMarker.setMap(null);
+    }
+
+    this._clusterMarker = null;
+    this._clusterCenter = null;
+    this._clusterBounds = null;
+    this._relation = null;
+
+    this._clusterMember = [];
+  },
+
+  /**
+   * _redraw 전용: 멤버 마커의 setMap 상태를 건드리지 않고 데이터 구조만 정리합니다.
+   * 클러스터 마커(합산 아이콘)만 제거하고, 개별 마커의 DOM은 그대로 유지합니다.
+   * 이후 _showMember/_hideMember가 실제 필요한 변경만 수행합니다.
+   * @private
+   */
+  _softDestroy: function () {
+    naver.maps.Event.removeListener(this._relation);
+
+    if (this._clusterMarker) {
+      this._clusterMarker.setMap(null);
+    }
 
     this._clusterMarker = null;
     this._clusterCenter = null;
@@ -562,21 +615,28 @@ Cluster.prototype = {
    * - 클러스터 마커 노출 여부
    */
   updateCluster: function () {
+    var clusterer = this._markerClusterer,
+      maxZoom = clusterer.getMaxZoom(),
+      currentZoom = clusterer.getMap().getZoom();
+
     if (!this._clusterMarker) {
       var position;
 
-      if (this._markerClusterer.getAverageCenter()) {
+      if (clusterer.getAverageCenter()) {
         position = this._calcAverageCenter(this._clusterMember);
       } else {
         position = this._clusterCenter;
       }
 
+      // maxZoom 이상에서는 개별 마커만 표시하므로 map 없이 생성한다.
+      // DOM에 삽입되지 않아 불필요한 DOM 조작을 방지하면서,
+      // _clusterMarker가 항상 존재하므로 다른 메서드에서 null 참조가 발생하지 않는다.
       this._clusterMarker = new naver.maps.Marker({
         position: position,
-        map: this._markerClusterer.getMap(),
+        map: maxZoom <= currentZoom ? null : clusterer.getMap(),
       });
 
-      if (!this._markerClusterer.getDisableClickZoom()) {
+      if (!clusterer.getDisableClickZoom()) {
         this.enableClickZoom();
       }
     }
@@ -596,14 +656,10 @@ Cluster.prototype = {
       maxZoom = clusterer.getMaxZoom(),
       currentZoom = clusterer.getMap().getZoom();
 
-    if (this.getCount() < minClusterSize) {
+    if (this.getCount() < minClusterSize || maxZoom <= currentZoom) {
       this._showMember();
     } else {
       this._hideMember();
-
-      if (maxZoom <= currentZoom) {
-        this._showMember();
-      }
     }
   },
 
@@ -632,6 +688,7 @@ Cluster.prototype = {
 
   /**
    * 클러스터를 구성하는 마커를 노출합니다. 이때에는 클러스터 마커를 노출하지 않습니다.
+   * 이미 지도에 표시 중인 마커는 setMap을 건너뛰어 불필요한 DOM 재삽입을 방지합니다.
    * @private
    */
   _showMember: function () {
@@ -640,16 +697,19 @@ Cluster.prototype = {
       members = this._clusterMember;
 
     for (var i = 0, ii = members.length; i < ii; i++) {
-      members[i].setMap(map);
+      if (members[i].getMap() !== map) {
+        members[i].setMap(map);
+      }
     }
 
-    if (marker) {
+    if (marker && marker.getMap()) {
       marker.setMap(null);
     }
   },
 
   /**
    * 클러스터를 구성하는 마커를 노출하지 않습니다. 이때에는 클러스터 마커를 노출합니다.
+   * 이미 숨겨진 마커는 setMap을 건너뛰어 불필요한 DOM 조작을 방지합니다.
    * @private
    */
   _hideMember: function () {
@@ -658,7 +718,9 @@ Cluster.prototype = {
       members = this._clusterMember;
 
     for (var i = 0, ii = members.length; i < ii; i++) {
-      members[i].setMap(null);
+      if (members[i].getMap() !== null) {
+        members[i].setMap(null);
+      }
     }
 
     if (marker && !marker.getMap()) {
